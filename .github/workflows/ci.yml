@@ -16,7 +16,7 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest -q
       - name: Offline regression evaluation
         run: |
           python evaluation/run_eval.py \
