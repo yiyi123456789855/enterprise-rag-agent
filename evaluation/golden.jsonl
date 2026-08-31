@@ -1,0 +1,4 @@
+{"question":"员工每年有多少天年假？","expected_document":"holiday.md","should_answer":true}
+{"question":"年假需要提前多久申请？","expected_document":"holiday.md","should_answer":true}
+{"question":"火星基地的核聚变发动机参数是什么？","expected_document":null,"should_answer":false}
+

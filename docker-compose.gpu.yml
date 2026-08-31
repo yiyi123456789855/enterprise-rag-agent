@@ -1,0 +1,9 @@
+services:
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    environment:
+      EMBEDDING_DEVICE: cuda
+    gpus: all
+

@@ -1,0 +1,15 @@
+{
+  "scope": "31-check server acceptance over one synthetic enterprise handbook",
+  "generator": "extractive",
+  "source_report": "server_acceptance_report-v5.json",
+  "hardware": "RTX 4090 shared-load server",
+  "run_date": "2026-08-31",
+  "passed": 31,
+  "failed": 0,
+  "total": 31,
+  "query_latency_ms": {
+    "average": 200.22,
+    "p50": 181.03,
+    "p95": 281.94
+  }
+}

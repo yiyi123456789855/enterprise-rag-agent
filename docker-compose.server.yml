@@ -1,0 +1,40 @@
+name: enterprise-rag-agent
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env.server}
+    ports:
+      - "127.0.0.1:${QDRANT_LOCAL_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - rag_internal
+
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    env_file:
+      - .env.server
+    ports:
+      - "${APP_BIND_IP:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    volumes:
+      - app_data:/app/data
+      - model_cache:/models/huggingface
+    depends_on:
+      - qdrant
+    networks:
+      - rag_internal
+
+networks:
+  rag_internal:
+    driver: bridge
+
+volumes:
+  app_data:
+  qdrant_data:
+  model_cache:

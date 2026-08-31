@@ -1,0 +1,16 @@
+{
+  "scope": "18-case deterministic local regression set over one synthetic enterprise handbook",
+  "backend": "HashingEmbedder + BM25 + RRF + lexical reranker",
+  "examples": 18,
+  "retrieval_cases": 13,
+  "recall_at_1": 1.0,
+  "recall_at_3": 1.0,
+  "recall_at_5": 1.0,
+  "mrr": 1.0,
+  "decision_accuracy": 1.0,
+  "answer_keyword_recall": 1.0,
+  "latency_p50_ms": 46.69,
+  "latency_p95_ms": 71.59,
+  "failures": [],
+  "note": "These figures are regression-test results, not production claims. Re-run on the BGE-M3/Qdrant deployment and a larger human-reviewed dataset before external reporting."
+}

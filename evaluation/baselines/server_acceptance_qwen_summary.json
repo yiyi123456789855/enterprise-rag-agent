@@ -1,0 +1,15 @@
+{
+  "scope": "31-check server acceptance over one synthetic enterprise handbook",
+  "generator": "Qwen/Qwen2.5-3B-Instruct via vLLM",
+  "source_report": "server_acceptance_report-qwen-v8.json",
+  "hardware": "RTX 4090 shared-load server",
+  "run_date": "2026-08-31",
+  "passed": 31,
+  "failed": 0,
+  "total": 31,
+  "query_latency_ms": {
+    "average": 613.67,
+    "p50": 599.84,
+    "p95": 1202.5
+  }
+}
