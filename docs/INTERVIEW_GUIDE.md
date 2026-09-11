@@ -34,7 +34,7 @@
 
 ### 当前最大局限是什么？
 
-任务队列仍使用 FastAPI BackgroundTasks，认证还是单个API Key，评测集规模较小。生产化需要 Redis/Celery、JWT/RBAC、PostgreSQL、集中监控和更大的人审数据集。
+v0.6.1 已加入 OIDC/JWT、PostgreSQL 连接池、Valkey/Celery 可靠入库、Redis 用户级限流、结构化日志、Prometheus 告警、可选 OpenTelemetry、HMAC 防篡改审计链，以及模型超时重试、熔断和有引用的抽取式降级。当前 Compose 仍是单机拓扑，上传正文使用共享暂存卷；跨主机扩展还需要 S3/MinIO、托管数据库高可用、Alertmanager/SIEM、审计 WORM 副本和更大的人审数据集。
 
 ### 评测结果为什么不能直接代表生产？
 

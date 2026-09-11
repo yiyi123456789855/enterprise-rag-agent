@@ -24,4 +24,6 @@ jobs:
             --dataset evaluation/golden_portfolio.jsonl \
             --tenant demo-company \
             --bootstrap examples/complex_enterprise_knowledge_base.md \
-            --output /tmp/rag-evaluation-report.json
+            --output /tmp/rag-evaluation-report.json \
+            --thresholds evaluation/thresholds.json \
+            --fail-on-regression

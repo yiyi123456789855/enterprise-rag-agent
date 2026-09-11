@@ -42,7 +42,8 @@ class RAGService:
         )
         citations = []
         if state.status == "answered":
-            for index, hit in enumerate(state.hits, start=1):
+            for index in state.citation_indices:
+                hit = state.hits[index - 1]
                 quote = hit.chunk.content.replace("\n", " ").strip()
                 citations.append(
                     {

@@ -12,6 +12,32 @@ class APITests(unittest.TestCase):
         os.environ["DATA_DIR"] = str(data_dir)
         os.environ["DATABASE_PATH"] = str(data_dir / "api.db")
 
+        from api.dependencies import (
+            get_answer_generator,
+            get_embedder,
+            get_ingestion_dispatcher,
+            get_ingestion_service,
+            get_rate_limiter,
+            get_rag_service,
+            get_repository,
+            get_reranker,
+            get_settings,
+            get_upload_store,
+            get_vector_index,
+        )
+
+        get_rag_service.cache_clear()
+        get_answer_generator.cache_clear()
+        get_rate_limiter.cache_clear()
+        get_ingestion_dispatcher.cache_clear()
+        get_ingestion_service.cache_clear()
+        get_upload_store.cache_clear()
+        get_repository.cache_clear()
+        get_vector_index.cache_clear()
+        get_embedder.cache_clear()
+        get_reranker.cache_clear()
+        get_settings.cache_clear()
+
         from fastapi.testclient import TestClient
         from app.main import app
 
@@ -22,17 +48,25 @@ class APITests(unittest.TestCase):
     def tearDownClass(cls):
         cls.client_context.__exit__(None, None, None)
         from api.dependencies import (
+            get_answer_generator,
             get_embedder,
+            get_ingestion_dispatcher,
             get_ingestion_service,
+            get_rate_limiter,
             get_rag_service,
             get_repository,
             get_reranker,
             get_settings,
+            get_upload_store,
             get_vector_index,
         )
 
         get_rag_service.cache_clear()
+        get_answer_generator.cache_clear()
+        get_rate_limiter.cache_clear()
+        get_ingestion_dispatcher.cache_clear()
         get_ingestion_service.cache_clear()
+        get_upload_store.cache_clear()
         get_repository.cache_clear()
         get_vector_index.cache_clear()
         get_embedder.cache_clear()
@@ -107,6 +141,20 @@ class APITests(unittest.TestCase):
         self.assertEqual(metrics.status_code, 200)
         self.assertEqual(metrics.json()["metrics"]["questions"], 1)
         self.assertEqual(metrics.json()["metrics"]["positive_feedback"], 1)
+
+        audit_events = self.client.get(
+            "/api/v1/audit-events", params={"tenant_id": "api-company"}
+        )
+        self.assertEqual(audit_events.status_code, 200)
+        self.assertEqual(
+            {event["action"] for event in audit_events.json()},
+            {"document.upload.accepted", "feedback.recorded"},
+        )
+        audit_verification = self.client.get(
+            "/api/v1/audit-events/verify", params={"tenant_id": "api-company"}
+        )
+        self.assertEqual(audit_verification.status_code, 200)
+        self.assertTrue(audit_verification.json()["valid"])
 
 
 if __name__ == "__main__":

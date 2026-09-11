@@ -20,9 +20,16 @@ from urllib import error, parse, request
 
 
 class ApiClient:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, credential: str, auth_scheme: str):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+        self.credential = credential
+        self.auth_scheme = auth_scheme
+
+    def auth_headers(self, credential: str | None = None) -> dict[str, str]:
+        value = self.credential if credential is None else credential
+        if self.auth_scheme == "bearer":
+            return {"Authorization": f"Bearer {value}"}
+        return {"X-API-Key": value}
 
     def json(
         self,
@@ -30,11 +37,11 @@ class ApiClient:
         path: str,
         payload: dict | None = None,
         *,
-        api_key: str | None = None,
+        credential: str | None = None,
         expected_status: int = 200,
     ) -> dict | list | None:
         body = None
-        headers = {"X-API-Key": self.api_key if api_key is None else api_key}
+        headers = self.auth_headers(credential)
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -90,10 +97,7 @@ class ApiClient:
         req = request.Request(
             f"{self.base_url}/api/v1/documents",
             data=b"".join(chunks),
-            headers={
-                "X-API-Key": self.api_key,
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-            },
+            headers={**self.auth_headers(), "Content-Type": f"multipart/form-data; boundary={boundary}"},
             method="POST",
         )
         result = self._open(req, 202)
@@ -178,15 +182,36 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--api-key", default=os.getenv("APP_API_KEY", ""))
+    parser.add_argument("--access-token", default=os.getenv("ACCESS_TOKEN", ""))
+    parser.add_argument("--sales-access-token", default=os.getenv("SALES_ACCESS_TOKEN", ""))
+    parser.add_argument("--other-tenant-access-token", default=os.getenv("OTHER_TENANT_ACCESS_TOKEN", ""))
     parser.add_argument("--tenant", default="demo-company")
     parser.add_argument("--dataset", default="evaluation/golden_portfolio.jsonl")
     parser.add_argument("--output", default="evaluation/server_acceptance_report.json")
     args = parser.parse_args()
-    if not args.api_key:
-        print("缺少 API Key：请先 source .env.direct 或传入 --api-key", file=sys.stderr)
+    credential = args.access_token or args.api_key
+    auth_scheme = "bearer" if args.access_token else "api-key"
+    if not credential:
+        print("缺少凭据：OIDC 使用 --access-token，开发模式使用 --api-key", file=sys.stderr)
+        return 2
+    if auth_scheme == "bearer" and (not args.sales_access_token or not args.other_tenant_access_token):
+        print(
+            "生产验收还需要 --sales-access-token 与 --other-tenant-access-token 来验证部门和租户隔离",
+            file=sys.stderr,
+        )
         return 2
 
-    client = ApiClient(args.base_url, args.api_key)
+    client = ApiClient(args.base_url, credential, auth_scheme)
+    sales_client = (
+        ApiClient(args.base_url, args.sales_access_token, auth_scheme)
+        if auth_scheme == "bearer"
+        else client
+    )
+    other_tenant_client = (
+        ApiClient(args.base_url, args.other_tenant_access_token, auth_scheme)
+        if auth_scheme == "bearer"
+        else client
+    )
     report = AcceptanceReport()
     latencies: list[float] = []
     first_conversation_id = ""
@@ -202,12 +227,12 @@ def main() -> int:
         client.json(
             "GET",
             f"/api/v1/metrics?tenant_id={parse.quote(args.tenant)}",
-            api_key="invalid-acceptance-key",
+            credential="invalid-acceptance-credential",
             expected_status=401,
         )
-        report.check("无效 API Key 被拒绝", True)
+        report.check("无效认证凭据被拒绝", True)
     except Exception as exc:
-        report.check("无效 API Key 被拒绝", False, str(exc))
+        report.check("无效认证凭据被拒绝", False, str(exc))
 
     examples = [
         json.loads(line)
@@ -321,7 +346,7 @@ def main() -> int:
         )
 
         sales_result = ask(
-            client,
+            sales_client,
             "星河7429项目首次灰度发布比例是多少？",
             tenant=args.tenant,
             departments=["市场部"],
@@ -330,7 +355,7 @@ def main() -> int:
         report.check("市场部无法检索研发私有文档", sales_result.get("status") == "insufficient_evidence")
 
         other_tenant = ask(
-            client,
+            other_tenant_client,
             "星河7429项目首次灰度发布比例是多少？",
             tenant="acceptance-other-company",
             departments=["研发部"],

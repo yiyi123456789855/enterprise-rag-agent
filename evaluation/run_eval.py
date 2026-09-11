@@ -25,6 +25,17 @@ def main() -> None:
     parser.add_argument("--bootstrap", nargs="*", default=[])
     parser.add_argument("--output", default="evaluation/latest_report.json")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--thresholds",
+        type=Path,
+        default=Path("evaluation/thresholds.json"),
+        help="JSON file containing minimums and maximums for release metrics.",
+    )
+    parser.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Exit non-zero when a case or configured metric threshold fails.",
+    )
     args = parser.parse_args()
 
     repository = Repository(args.database)
@@ -108,7 +119,7 @@ def main() -> None:
             )
 
     total = max(1, len(examples))
-    report = {
+    report: dict = {
         "dataset": str(args.dataset),
         "examples": len(examples),
         "retrieval_cases": retrieval_cases,
@@ -122,10 +133,17 @@ def main() -> None:
         "latency_p95_ms": round(_percentile(latencies, 0.95), 2),
         "failures": failures,
     }
+    thresholds = _load_thresholds(args.thresholds)
+    threshold_failures = _threshold_failures(report, thresholds)
+    report["thresholds"] = thresholds
+    report["threshold_failures"] = threshold_failures
+    report["passed"] = not failures and not threshold_failures
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.fail_on_regression and not report["passed"]:
+        raise SystemExit(1)
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -142,6 +160,38 @@ def _percentile(values: list[float], percentile: float) -> float:
     ordered = sorted(values)
     index = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * percentile))))
     return ordered[index]
+
+
+def _load_thresholds(path: Path) -> dict:
+    if not path.exists():
+        raise ValueError(f"Threshold file not found: {path}")
+    thresholds = json.loads(path.read_text("utf-8"))
+    if not isinstance(thresholds, dict):
+        raise ValueError("Threshold configuration must be a JSON object")
+    for section in ("minimums", "maximums"):
+        values = thresholds.get(section, {})
+        if not isinstance(values, dict):
+            raise ValueError(f"Threshold section '{section}' must be an object")
+        if not all(isinstance(value, (int, float)) for value in values.values()):
+            raise ValueError(f"Threshold section '{section}' must contain numeric values")
+    return thresholds
+
+
+def _threshold_failures(report: dict, thresholds: dict) -> list[dict]:
+    failures: list[dict] = []
+    for metric, expected in thresholds.get("minimums", {}).items():
+        actual = report.get(metric)
+        if not isinstance(actual, (int, float)) or actual < expected:
+            failures.append(
+                {"metric": metric, "operator": ">=", "expected": expected, "actual": actual}
+            )
+    for metric, expected in thresholds.get("maximums", {}).items():
+        actual = report.get(metric)
+        if not isinstance(actual, (int, float)) or actual > expected:
+            failures.append(
+                {"metric": metric, "operator": "<=", "expected": expected, "actual": actual}
+            )
+    return failures
 
 
 if __name__ == "__main__":

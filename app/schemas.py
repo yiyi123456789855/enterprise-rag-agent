@@ -35,9 +35,21 @@ class JobResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
-    tenant_id: str = Field(default="default", min_length=1, max_length=100)
-    user_id: str = Field(default="anonymous", max_length=100)
-    departments: list[str] = Field(default_factory=list)
+    tenant_id: str = Field(
+        default="default", min_length=1, max_length=100,
+        description="Legacy/demo only; ignored when AUTH_MODE=oidc",
+        json_schema_extra={"deprecated": True},
+    )
+    user_id: str = Field(
+        default="anonymous", max_length=100,
+        description="Legacy/demo only; ignored when AUTH_MODE=oidc",
+        json_schema_extra={"deprecated": True},
+    )
+    departments: list[str] = Field(
+        default_factory=list,
+        description="Legacy/demo only; ignored when AUTH_MODE=oidc",
+        json_schema_extra={"deprecated": True},
+    )
     top_k: int = Field(default=5, ge=1, le=20)
     session_id: str = Field(default="", max_length=100)
 
@@ -87,7 +99,11 @@ class ConversationResponse(BaseModel):
 
 class FeedbackRequest(BaseModel):
     conversation_id: str = Field(min_length=1, max_length=100)
-    tenant_id: str = Field(default="default", min_length=1, max_length=100)
+    tenant_id: str = Field(
+        default="default", min_length=1, max_length=100,
+        description="Legacy/demo only; ignored when AUTH_MODE=oidc",
+        json_schema_extra={"deprecated": True},
+    )
     rating: Literal[-1, 1]
     comment: str = Field(default="", max_length=1000)
 
@@ -105,3 +121,26 @@ class MetricsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     details: dict[str, Any]
+
+
+class AuditEventResponse(BaseModel):
+    id: str
+    sequence: int
+    tenant_id: str
+    actor_id: str
+    action: str
+    resource_type: str
+    resource_id: str
+    request_id: str
+    source_ip_hash: str
+    details: dict[str, Any]
+    previous_hash: str
+    event_hash: str
+    created_at: datetime
+
+
+class AuditVerificationResponse(BaseModel):
+    tenant_id: str
+    valid: bool
+    event_count: int
+    first_invalid_sequence: int | None = None

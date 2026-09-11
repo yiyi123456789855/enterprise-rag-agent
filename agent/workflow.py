@@ -25,6 +25,7 @@ class AgentState:
     status: str = ""
     retrieval_ms: float = 0.0
     generation_ms: float = 0.0
+    citation_indices: list[int] = field(default_factory=list)
 
 
 class RAGWorkflow:
@@ -47,11 +48,20 @@ class RAGWorkflow:
         self.query_rewriter = query_rewriter or ContextualQueryRewriter()
 
     def run(self, state: AgentState) -> AgentState:
+        state = self.guard(state)
+        if state.evidence is not None:
+            return self.refuse(state)
         state = self.retrieve(state)
         state = self.check_evidence(state)
         if state.evidence and state.evidence.sufficient:
             return self.answer(state)
         return self.refuse(state)
+
+    def guard(self, state: AgentState) -> AgentState:
+        """Apply deterministic safety policy before query rewriting/retrieval."""
+
+        state.evidence = self.evidence_gate.precheck(state.question)
+        return state
 
     def retrieve(self, state: AgentState) -> AgentState:
         started = perf_counter()
@@ -97,6 +107,7 @@ class RAGWorkflow:
                 state.evidence.sufficient = False
                 state.evidence.reason = "生成结果缺少有效证据引用"
             return state
+        state.citation_indices = sorted(valid_references)
         state.status = "answered"
         return state
 

@@ -1,20 +1,36 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import socket
+import threading
+import time
 from typing import Protocol
-from urllib import request
+from urllib import error, request
 
 from app.types import SearchHit
 from retrieval.tokenizer import tokenize
 
 
 class AnswerGenerator(Protocol):
+    name: str
+    fallback_name: str
+
     def generate(self, question: str, hits: list[SearchHit]) -> str: ...
+
+    def health(self) -> bool: ...
 
 
 class ExtractiveAnswerGenerator:
     """Grounded fallback that works without an external model service."""
+
+    name = "extractive"
+    fallback_name = ""
+
+    @staticmethod
+    def health() -> bool:
+        return True
 
     def generate(self, question: str, hits: list[SearchHit]) -> str:
         query_tokens = set(tokenize(question, remove_stopwords=True))
@@ -99,14 +115,31 @@ _GENERIC_QUESTION_TOKENS = {
 
 def _extract_segments(content: str) -> list[str]:
     segments: list[str] = []
+    table_headers: list[str] | None = None
     for raw_line in content.splitlines():
         line = raw_line.strip()
-        if not line or re.fullmatch(r"\|?[\s:|-]+\|?", line):
+        if not line:
+            table_headers = None
+            continue
+        if re.fullmatch(r"\|?[\s:|-]+\|?", line):
             continue
         line = re.sub(r"^#{1,6}\s*|^[-*+]\s+|^\d+[.)、]\s*", "", line)
         if line.startswith("|") and line.endswith("|"):
             cells = [cell.strip() for cell in line.strip("|").split("|") if cell.strip()]
-            line = "；".join(cells)
+            if table_headers is None:
+                table_headers = cells
+                continue
+            if len(cells) == len(table_headers):
+                # Preserve column meaning in every row. Without the header, a
+                # row such as "成都 | 550元" does not contain the queried role
+                # "普通员工" and can lose to unrelated prose during extraction.
+                line = "；".join(
+                    f"{header}：{cell}" for header, cell in zip(table_headers, cells)
+                )
+            else:
+                line = "；".join(cells)
+        else:
+            table_headers = None
         segments.extend(
             sentence.strip()
             for sentence in re.split(r"(?<=[。！？.!?])\s*", line)
@@ -149,13 +182,90 @@ def _range_matches(question: str, sentence: str) -> bool:
 
 
 class OpenAICompatibleGenerator:
-    def __init__(self, *, base_url: str, api_key: str, model: str, timeout: int = 60):
-        self.url = f"{base_url.rstrip('/')}/chat/completions"
+    """OpenAI-compatible generation with bounded failures and grounded fallback."""
+
+    fallback_name = "extractive"
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: int = 60,
+        health_timeout: int = 2,
+        max_retries: int = 1,
+        retry_backoff_seconds: float = 0.25,
+        failure_threshold: int = 3,
+        circuit_reset_seconds: int = 30,
+        fallback: AnswerGenerator | None = None,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.url = f"{self.base_url}/chat/completions"
         self.api_key = api_key
         self.model = model
+        self.name = model
         self.timeout = timeout
+        self.health_timeout = health_timeout
+        self.max_retries = max(0, max_retries)
+        self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self.failure_threshold = max(1, failure_threshold)
+        self.circuit_reset_seconds = max(1, circuit_reset_seconds)
+        self.fallback = fallback or ExtractiveAnswerGenerator()
+        self._consecutive_failures = 0
+        self._circuit_opened_at = 0.0
+        self._state_lock = threading.Lock()
+        self._logger = logging.getLogger("rag.generator")
 
     def generate(self, question: str, hits: list[SearchHit]) -> str:
+        if self._circuit_is_open():
+            self._logger.warning(
+                "LLM circuit is open; using grounded extractive fallback",
+                extra={"error_type": "CircuitOpen"},
+            )
+            return self.fallback.generate(question, hits)
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                answer = self._generate_remote(question, hits)
+                break
+            except _EXPECTED_LLM_FAILURES as exc:
+                if attempt < self.max_retries and _is_retryable(exc):
+                    delay = self.retry_backoff_seconds * (2 ** attempt)
+                    self._logger.warning(
+                        "LLM generation attempt failed; retrying",
+                        extra={"error_type": type(exc).__name__},
+                    )
+                    if delay:
+                        time.sleep(delay)
+                    continue
+                self._record_failure()
+                self._logger.warning(
+                    "LLM generation failed; using grounded extractive fallback",
+                    extra={"error_type": type(exc).__name__},
+                )
+                return self.fallback.generate(question, hits)
+
+        self._record_success()
+        return answer
+
+    def health(self) -> bool:
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        health_request = request.Request(
+            f"{self.base_url}/models",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with request.urlopen(health_request, timeout=self.health_timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except _EXPECTED_LLM_FAILURES:
+            return False
+        return isinstance(payload, dict) and isinstance(payload.get("data"), list)
+
+    def _generate_remote(self, question: str, hits: list[SearchHit]) -> str:
         evidence = "\n\n".join(
             f"[{index}] 文件：{hit.chunk.filename}；章节：{hit.chunk.heading or '无'}；"
             f"页码：{hit.chunk.page_number or '未知'}\n{hit.chunk.content}"
@@ -204,3 +314,44 @@ class OpenAICompatibleGenerator:
         # a false refusal. Fall back to the deterministic extractive generator,
         # which emits citations tied to the same ACL-filtered retrieval hits.
         return ExtractiveAnswerGenerator().generate(question, hits)
+
+    def _circuit_is_open(self) -> bool:
+        with self._state_lock:
+            if self._consecutive_failures < self.failure_threshold:
+                return False
+            if time.monotonic() - self._circuit_opened_at >= self.circuit_reset_seconds:
+                self._consecutive_failures = 0
+                self._circuit_opened_at = 0.0
+                return False
+            return True
+
+    def _record_failure(self) -> None:
+        with self._state_lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.failure_threshold:
+                self._circuit_opened_at = time.monotonic()
+
+    def _record_success(self) -> None:
+        with self._state_lock:
+            self._consecutive_failures = 0
+            self._circuit_opened_at = 0.0
+
+
+_EXPECTED_LLM_FAILURES = (
+    error.URLError,
+    TimeoutError,
+    socket.timeout,
+    OSError,
+    json.JSONDecodeError,
+    UnicodeError,
+    KeyError,
+    IndexError,
+    TypeError,
+    ValueError,
+)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return True

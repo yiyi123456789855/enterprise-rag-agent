@@ -100,9 +100,11 @@
       <div class="stack">
         <section class="card">
           <div class="card-head"><h2>连接与身份</h2><button id="refreshButton" class="ghost" type="button">刷新数据</button></div>
-          <label for="apiKey">服务器 API Key</label>
-          <input id="apiKey" type="password" autocomplete="off" placeholder=".env.direct 中的 APP_API_KEY">
-          <p class="hint">密钥只保存在当前浏览器标签页。租户与部门会在检索前参与权限过滤。</p>
+          <div class="row">
+            <div><label for="authMode">认证方式</label><select id="authMode"><option value="bearer">OIDC Bearer Token</option><option value="legacy">开发 API Key</option></select></div>
+            <div><label for="apiKey">访问凭据</label><input id="apiKey" type="password" autocomplete="off" placeholder="粘贴短期 Access Token"></div>
+          </div>
+          <p class="hint">OIDC 模式的租户、用户、部门和角色来自签名 Token；下方身份字段只在开发 API Key 模式生效。Token 不写入浏览器存储。</p>
           <div class="row">
             <div><label for="tenant">租户 ID</label><input id="tenant" value="demo-company"></div>
             <div><label for="departments">用户部门</label><input id="departments" value="研发部" placeholder="多个部门用逗号分隔"></div>
@@ -160,11 +162,19 @@
     sessionStorage.setItem("ragSessionId", sessionId);
     const headers = () => {
       const result = {};
-      if ($("apiKey").value.trim()) result["X-API-Key"] = $("apiKey").value.trim();
+      const credential = $("apiKey").value.trim();
+      if (credential) {
+        if ($("authMode").value === "bearer") result["Authorization"] = `Bearer ${credential}`;
+        else result["X-API-Key"] = credential;
+      }
       return result;
     };
-    $("apiKey").value = sessionStorage.getItem("ragApiKey") || "";
-    $("apiKey").addEventListener("input", () => sessionStorage.setItem("ragApiKey", $("apiKey").value));
+    $("authMode").value = sessionStorage.getItem("ragAuthMode") || "bearer";
+    $("authMode").addEventListener("change", () => {
+      sessionStorage.setItem("ragAuthMode", $("authMode").value);
+      $("apiKey").value = "";
+      $("apiKey").placeholder = $("authMode").value === "bearer" ? "粘贴短期 Access Token" : "输入 APP_API_KEY";
+    });
     async function request(url, options = {}) {
       options.headers = {...headers(), ...(options.headers || {})};
       const response = await fetch(url, options);
@@ -179,7 +189,7 @@
         $("healthDot").classList.toggle("ok", health.status === "ok");
         $("healthText").textContent = health.status === "ok" ? `服务正常 · ${health.details.retrieval_backend}` : "服务降级";
         const d = health.details;
-        $("techStrip").innerHTML = [`Vector DB · ${d.retrieval_backend}`, `Embedding · ${d.embedding_model}`, `Reranker · ${d.reranker}`, `Generator · ${d.generator}`, "ACL · tenant + department", "Guardrail · citation + security"].map(v => `<span class="badge">${escapeHtml(v)}</span>`).join("");
+        $("techStrip").innerHTML = [`Vector DB · ${d.retrieval_backend}`, `Embedding · ${d.embedding_model}`, `Reranker · ${d.reranker}`, `Generator · ${d.generator} · ${d.generator_status || "unknown"}`, "ACL · tenant + department", "Guardrail · citation + security"].map(v => `<span class="badge">${escapeHtml(v)}</span>`).join("");
       } catch (error) { $("healthText").textContent = "服务不可用"; }
     }
     function setMessage(text, error = false) { $("uploadMessage").textContent = text; $("uploadMessage").classList.toggle("error", error); }

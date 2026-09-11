@@ -1,0 +1,45 @@
+groups:
+  - name: enterprise-rag
+    rules:
+      - alert: EnterpriseRagApiDown
+        expr: up{job="enterprise-rag-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Enterprise RAG API is unavailable
+      - alert: EnterpriseRagHighErrorRate
+        expr: |
+          sum(rate(rag_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(rag_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Enterprise RAG API 5xx rate is above 5%
+      - alert: EnterpriseRagDependencyUnavailable
+        expr: rag_dependency_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Enterprise RAG runtime dependency is unavailable
+      - alert: EnterpriseRagHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(rag_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Enterprise RAG API P95 latency is above 2 seconds
+      - alert: EnterpriseRagRateLimitSpike
+        expr: sum(increase(rag_rate_limit_rejections_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Enterprise RAG is rejecting an unusual number of requests

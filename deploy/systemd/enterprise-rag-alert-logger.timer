@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll Enterprise RAG Prometheus Alerts Every Minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=10s
+Persistent=true
+Unit=enterprise-rag-alert-logger.service
+
+[Install]
+WantedBy=timers.target

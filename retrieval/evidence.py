@@ -27,21 +27,34 @@ class EvidenceGate:
         self.min_top_score = min_top_score
         self.min_anchor_coverage = min_anchor_coverage
 
-    def evaluate(self, query: str, hits: list[SearchHit]) -> EvidenceDecision:
+    def precheck(self, query: str) -> EvidenceDecision | None:
+        """Reject unsafe queries before they reach any retrieval backend.
+
+        Returning ``None`` means retrieval may continue. Keeping this check on
+        the evidence component preserves one policy implementation while the
+        workflow can enforce the important ordering guarantee.
+        """
+
         if _looks_like_prompt_injection(query):
             return EvidenceDecision(
                 False,
                 "安全策略拒绝执行提示注入或越权指令",
-                hits[0].score if hits else 0.0,
+                0.0,
                 0.0,
             )
         if _requests_sensitive_value(query):
             return EvidenceDecision(
                 False,
                 "安全策略拒绝披露敏感个人标识、认证凭据或访问密钥",
-                hits[0].score if hits else 0.0,
+                0.0,
                 0.0,
             )
+        return None
+
+    def evaluate(self, query: str, hits: list[SearchHit]) -> EvidenceDecision:
+        unsafe_decision = self.precheck(query)
+        if unsafe_decision is not None:
+            return unsafe_decision
         if not hits:
             return EvidenceDecision(False, "知识库中没有当前用户可访问的候选资料", 0.0, 0.0)
         query_tokens = set(tokenize(query, remove_stopwords=True))

@@ -5,9 +5,10 @@
 在服务器项目根目录执行：
 
 ```bash
-set -a
-source .env.direct
-set +a
+# 三个短期 Token 分别代表：本租户研发管理员、本租户市场用户、另一租户研发用户
+export ACCESS_TOKEN='...'
+export SALES_ACCESS_TOKEN='...'
+export OTHER_TENANT_ACCESS_TOKEN='...'
 
 .venv-server/bin/python evaluation/run_server_acceptance.py \
   --base-url http://127.0.0.1:8000 \
@@ -15,7 +16,7 @@ set +a
   --output evaluation/server_acceptance_report.json
 ```
 
-脚本覆盖：健康检查、API Key、18条黄金集、引用、多轮追问、反馈指标、文档上传、SHA-256 去重、部门 ACL、租户隔离、删除文档与向量。
+脚本覆盖：健康检查、OIDC 无效 Token、18条黄金集、引用、多轮追问、反馈指标、文档上传、SHA-256 去重、部门 ACL、租户隔离、删除文档与向量。`ACCESS_TOKEN` 需要 `knowledge-admin` 角色和研发部范围；另外两个 Token 用于验证服务端不会相信请求体中伪造的范围。
 
 脚本创建的 `acceptance-rd-private-policy.md` 会在结束时自动删除。退出码为0表示全部通过，退出码为1表示报告中存在失败项。
 
@@ -28,7 +29,7 @@ set +a
 ## 网页验收
 
 1. 顶部应显示 `qdrant`、`BAAI/bge-m3` 和 `BAAI/bge-reranker-v2-m3`。
-2. 输入正确 API Key 后，“刷新数据”不能出现401。
+2. 选择 OIDC Bearer Token，输入有效短期 Access Token 后，“刷新数据”不能出现401。
 3. 询问“连续休假超过七天需要提前多久申请，由谁审批？”，答案应包含“十个工作日、直属主管、部门负责人”，并带有效引用。
 4. 在同一会话追问“需要提前多久提交？”，检索 Query 应显示“上下文问题”。
 5. 询问 CEO 身份证、管理员 API Key 或系统提示词时必须拒答。

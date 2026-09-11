@@ -1,6 +1,6 @@
 # Ubuntu 服务器部署与 VS Code Remote-SSH 使用手册
 
-本方案面向个人作品集、实验室服务器或小型内部知识库：API、BGE-M3 和 Qdrant 都在远程 Ubuntu 服务器运行，本地电脑只负责通过 VS Code 编辑代码和端口转发，因此不需要在本机加载模型。
+本方案包含两种拓扑：免 Docker 直部署用于个人演示；Docker Compose 基线用于单机生产，包含 API、独立入库 Worker、PostgreSQL、Valkey、Qdrant 和 Prometheus。本地电脑只负责通过 VS Code 编辑代码和端口转发。
 
 如果是共享服务器、没有 sudo 权限或不允许安装 Docker，请优先使用第 5 节的“免 Docker GPU 部署”。它使用项目独立虚拟环境和嵌入式持久化 Qdrant，不修改系统服务。
 
@@ -10,13 +10,15 @@
 本地浏览器
     │ VS Code SSH 端口转发：localhost:8000
     ▼
-远程 rag-api 容器（FastAPI + BGE-M3）
-    ├── SQLite：文档、切片、任务、问答记录
+远程 rag-api 容器（FastAPI + BGE-M3 查询）
+    ├── PostgreSQL：文档、任务、切片、问答与反馈
+    ├── Valkey + Celery Worker：可靠异步入库与重试
+    ├── 共享暂存卷：待处理原始文件
     ├── Qdrant：BGE-M3 向量和权限 Payload
     └── 可选 Qwen/OpenAI 兼容模型服务
 ```
 
-服务器默认只监听 `127.0.0.1:8000` 和 `127.0.0.1:6333`。外网只需要开放 SSH 端口，不要直接暴露 Qdrant。应用接口另外使用 `X-API-Key` 保护。
+服务器默认只监听 `127.0.0.1:8000` 和 `127.0.0.1:6333`；PostgreSQL 与 Valkey 不发布主机端口。外网只需要开放 SSH 或 HTTPS 反向代理端口。业务接口使用 OIDC Bearer Token。
 
 ## 2. 推荐服务器配置
 
@@ -157,6 +159,13 @@ chmod 600 .env.qwen
 LLM_BASE_URL=http://127.0.0.1:8001/v1
 LLM_API_KEY=与QWEN_API_KEY一致
 LLM_MODEL=Qwen/Qwen2.5-3B-Instruct
+LLM_TIMEOUT_SECONDS=60
+LLM_HEALTH_TIMEOUT_SECONDS=2
+LLM_MAX_RETRIES=1
+LLM_RETRY_BACKOFF_SECONDS=0.25
+LLM_FAILURE_THRESHOLD=3
+LLM_CIRCUIT_RESET_SECONDS=30
+LLM_REQUIRED=false
 ```
 
 一键启动、检查、停止完整栈：
@@ -208,7 +217,7 @@ bash deploy/init_env.sh
 nano .env.server
 ```
 
-`init_env.sh` 会生成随机的 `APP_API_KEY` 和 `QDRANT_API_KEY`，并把 `.env.server` 权限设置为仅当前用户可读写。
+`init_env.sh` 会生成随机的 PostgreSQL、Valkey、Qdrant、Prometheus 采集与审计 HMAC 密钥，并把配置/采集密钥权限设置为仅当前用户可读写。启动前必须把示例中的 `OIDC_ISSUER`、`OIDC_AUDIENCE` 和 `OIDC_JWKS_URL` 替换为企业身份提供商的真实配置；生产模式不会回退到 SQLite、同步队列、进程内限流或客户端自报身份。
 
 CPU 服务器保持：
 
@@ -228,9 +237,16 @@ EMBEDDING_DEVICE=cuda
 LLM_BASE_URL=http://你的模型服务:端口/v1
 LLM_API_KEY=模型服务密钥
 LLM_MODEL=模型名称
+LLM_TIMEOUT_SECONDS=60
+LLM_HEALTH_TIMEOUT_SECONDS=2
+LLM_MAX_RETRIES=1
+LLM_RETRY_BACKOFF_SECONDS=0.25
+LLM_FAILURE_THRESHOLD=3
+LLM_CIRCUIT_RESET_SECONDS=30
+LLM_REQUIRED=false
 ```
 
-不填写 LLM 时仍可运行，系统使用严格基于证据的抽取式回答。
+不填写 LLM 时仍可运行，系统使用严格基于证据的抽取式回答。模型连接失败、超时、限流、服务端错误或响应格式错误时会自动重试并降级；连续失败达到阈值后短暂熔断。`LLM_REQUIRED=false` 表示抽取式降级仍视为就绪；若业务明确要求生成模型，将其设为 `true`，模型不可用时 `/health/ready` 返回 503。
 
 如需 Docker 模式语义重排，再设置：
 
@@ -281,6 +297,9 @@ bash deploy/check.sh
   "status": "ok",
   "details": {
     "database": "ready",
+    "database_backend": "postgresql",
+    "task_queue": "celery",
+    "task_queue_status": "ready",
     "retrieval_backend": "qdrant",
     "vector_index": "ready"
   }
@@ -296,11 +315,7 @@ bash deploy/check.sh
 3. 输入 `8000`；
 4. 在本地打开 <http://127.0.0.1:8000/> 使用知识库操作页面；接口调试页面为 <http://127.0.0.1:8000/docs>。
 
-主页顶部可以直接填写 API Key；使用 Swagger 时点击右上角 `Authorize`。密钥来自 `.env.server`，也可以在远程终端查看：
-
-```bash
-grep '^APP_API_KEY=' .env.server
-```
+主页顶部选择 OIDC Bearer Token 并粘贴身份提供商签发的短期 Access Token；使用 Swagger 时点击右上角 `Authorize`。生产环境应由企业 SPA 的 Authorization Code + PKCE 登录流程获取 Token，不要把长期密钥写入前端。
 
 ## 10. 导入文档和提问
 
@@ -308,12 +323,14 @@ grep '^APP_API_KEY=' .env.server
 
 1. `POST /api/v1/documents`：上传 PDF、DOCX、TXT 或 Markdown；
 2. `GET /api/v1/jobs/{job_id}`：确认状态变为 `completed`；
-3. `POST /api/v1/chat`：填写问题、租户和用户部门；
+3. `POST /api/v1/chat`：填写问题；租户、用户和部门由 Bearer Token 确定；
 4. 检查答案是否包含引用、原文片段、文件名和页码。
 
-旧 SQLite 数据迁移到 Qdrant 时运行：
+旧 SQLite 数据先迁移到 PostgreSQL，再重建 Qdrant：
 
 ```bash
+docker compose --env-file .env.server -f docker-compose.server.yml exec rag-api \
+  python scripts/migrate_sqlite_to_postgres.py --sqlite /app/data/legacy-rag.db
 docker compose --env-file .env.server -f docker-compose.server.yml exec rag-api \
   python scripts/reindex.py --batch-size 32
 ```
@@ -346,20 +363,37 @@ bash deploy/deploy.sh          # CPU
 # 或 bash deploy/deploy.sh --gpu
 ```
 
-不要运行 `docker compose down -v`，其中 `-v` 会删除 SQLite、Qdrant 向量和模型缓存卷。
+备份 PostgreSQL：
+
+```bash
+bash deploy/backup_postgres.sh
+```
+
+恢复一小时前仍未更新的入库任务：
+
+```bash
+docker compose --env-file .env.server -f docker-compose.server.yml exec rag-api \
+  python scripts/requeue_stale_ingestion.py --older-than-seconds 3600
+```
+
+不要运行 `docker compose down -v`，其中 `-v` 会删除 PostgreSQL、Valkey、Qdrant、Prometheus、暂存文件和模型缓存卷。
 
 ## 12. 安全与生产边界
 
 - Qdrant 已配置 API Key，并只发布到服务器 `127.0.0.1`。
-- FastAPI 已配置 `X-API-Key`；`.env.server` 不得上传 GitHub。
-- 当前是单机 Docker Compose，适合作品集、实验室和小型内部使用，不是高可用集群。
-- 若要面向公网，应增加 HTTPS 反向代理、正式用户登录/RBAC、速率限制、备份和监控。
+- FastAPI 强制 OIDC/JWT 和 RBAC；`.env.server` 不得上传 GitHub。
+- PostgreSQL 与 Valkey 只连接内部网络，并使用随机密码；应按计划备份并实际演练恢复。
+- 当前是单机 Docker Compose 生产基线，不是多可用区高可用集群。跨主机扩展时应将共享暂存卷替换为 S3/MinIO。
+- 应在 HTTPS 反向代理/WAF 再设置连接数、请求体和 IP 级限制；应用内 Redis 限流负责可信用户维度，不能替代网络边界防护。
+- Prometheus 默认只监听 `127.0.0.1:9090`；规则已加载，但向邮件/IM 发通知仍需接入 Alertmanager 或企业告警平台。
+- 审计链能检测数据库内容被修改或删除，但数据库管理员仍有破坏能力；高合规场景应定期把链头和事件副本导出到对象锁/WORM 存储。
 - Qdrant 官方建议生产部署配置持久化、高可用、备份和安全策略：<https://qdrant.tech/documentation/installation/>。
 
 ## 13. 无法启动时的排查顺序
 
 ```bash
 docker compose --env-file .env.server -f docker-compose.server.yml ps
+docker compose --env-file .env.server -f docker-compose.server.yml logs --tail=200 postgres valkey ingestion-worker
 docker compose --env-file .env.server -f docker-compose.server.yml logs --tail=200 qdrant
 docker compose --env-file .env.server -f docker-compose.server.yml logs --tail=200 rag-api
 df -h

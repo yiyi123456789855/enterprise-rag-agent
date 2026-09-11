@@ -1,0 +1,17 @@
+[Unit]
+Description=Enterprise RAG Prometheus Alert Journal Logger
+After=network-online.target enterprise-rag-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__RAG_USER__
+Group=__RAG_GROUP__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/deploy/log_prometheus_alerts.py --state-file __PROJECT_DIR__/data/monitoring/prometheus-alert-state.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=__PROJECT_DIR__/data/monitoring
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

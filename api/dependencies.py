@@ -7,7 +7,10 @@ from agent.service import RAGService
 from agent.workflow import RAGWorkflow
 from app.config import Settings
 from app.database import Repository
+from app.rate_limit import RateLimiter
 from ingestion.service import IngestionService
+from ingestion.dispatcher import IngestionDispatcher
+from ingestion.upload_store import UploadStore
 from retrieval.evidence import EvidenceGate
 from retrieval.embeddings import HashingEmbedder, SentenceTransformerEmbedder
 from retrieval.hybrid import HybridRetriever
@@ -18,15 +21,26 @@ from retrieval.vector_store import QdrantVectorIndex, VectorIndex
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings.from_env()
+    settings.validate()
     settings.ensure_directories()
     return settings
 
 
 @lru_cache
 def get_repository() -> Repository:
-    repository = Repository(get_settings().database_path)
+    settings = get_settings()
+    repository = Repository(
+        settings.database_dsn,
+        pool_size=settings.database_pool_size,
+        audit_hmac_key=settings.audit_hmac_key,
+    )
     repository.initialize()
     return repository
+
+
+@lru_cache
+def get_rate_limiter() -> RateLimiter:
+    return RateLimiter(get_settings())
 
 
 @lru_cache
@@ -37,6 +51,21 @@ def get_ingestion_service() -> IngestionService:
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
         vector_index=get_vector_index(),
+    )
+
+
+@lru_cache
+def get_upload_store() -> UploadStore:
+    return UploadStore(get_settings().upload_dir)
+
+
+@lru_cache
+def get_ingestion_dispatcher() -> IngestionDispatcher:
+    return IngestionDispatcher(
+        get_settings(),
+        get_repository(),
+        get_ingestion_service(),
+        get_upload_store(),
     )
 
 
@@ -74,13 +103,7 @@ def get_reranker():
 @lru_cache
 def get_rag_service() -> RAGService:
     settings = get_settings()
-    generator = ExtractiveAnswerGenerator()
-    if settings.llm_base_url and settings.llm_model:
-        generator = OpenAICompatibleGenerator(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            model=settings.llm_model,
-        )
+    generator = get_answer_generator()
     workflow = RAGWorkflow(
         HybridRetriever(
             get_repository(),
@@ -96,3 +119,22 @@ def get_rag_service() -> RAGService:
         generator,
     )
     return RAGService(get_repository(), workflow)
+
+
+@lru_cache
+def get_answer_generator():
+    settings = get_settings()
+    generator = ExtractiveAnswerGenerator()
+    if settings.llm_base_url and settings.llm_model:
+        generator = OpenAICompatibleGenerator(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            timeout=settings.llm_timeout_seconds,
+            health_timeout=settings.llm_health_timeout_seconds,
+            max_retries=settings.llm_max_retries,
+            retry_backoff_seconds=settings.llm_retry_backoff_seconds,
+            failure_threshold=settings.llm_failure_threshold,
+            circuit_reset_seconds=settings.llm_circuit_reset_seconds,
+        )
+    return generator

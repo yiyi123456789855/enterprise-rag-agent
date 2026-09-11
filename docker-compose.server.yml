@@ -1,6 +1,39 @@
 name: enterprise-rag-agent
 
 services:
+  postgres:
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.server}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rag_internal
+
+  valkey:
+    image: valkey/valkey:8.1.10-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.server}
+    command: ["valkey-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.server}"]
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rag_internal
+
   qdrant:
     image: qdrant/qdrant:v1.19.0
     restart: unless-stopped
@@ -26,7 +59,53 @@ services:
       - app_data:/app/data
       - model_cache:/models/huggingface
     depends_on:
-      - qdrant
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - rag_internal
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    command: ["celery", "-A", "ingestion.tasks:celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--queues=ingestion"]
+    env_file:
+      - .env.server
+    volumes:
+      - app_data:/app/data
+      - model_cache:/models/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - rag_internal
+
+  prometheus:
+    image: prom/prometheus:v3.13.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "127.0.0.1:${PROMETHEUS_LOCAL_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./data/secrets/metrics_token:/run/secrets/metrics_token:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      rag-api:
+        condition: service_started
     networks:
       - rag_internal
 
@@ -36,5 +115,8 @@ networks:
 
 volumes:
   app_data:
+  postgres_data:
+  valkey_data:
   qdrant_data:
   model_cache:
+  prometheus_data:

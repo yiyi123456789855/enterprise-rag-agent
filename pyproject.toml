@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-rag-agent"
-version = "0.3.1"
+version = "0.6.5"
 description = "A citation-first enterprise knowledge-base RAG agent."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,8 +13,10 @@ dependencies = [
   "uvicorn[standard]>=0.30,<1.0",
   "python-multipart>=0.0.9,<1.0",
   "pydantic>=2.7,<3.0",
+  "PyJWT[crypto]>=2.10,<3.0",
   "pypdf>=5.0,<7.0",
   "python-docx>=1.1,<2.0",
+  "prometheus-client>=0.21,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +26,13 @@ dev = [
   "qdrant-client>=1.19,<1.20",
 ]
 server = [
+  "celery[redis]>=5.4,<6.0",
+  "psycopg[binary,pool]>=3.2,<4.0",
   "qdrant-client>=1.19,<1.20",
   "sentence-transformers>=3.4,<6.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+  "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
+  "opentelemetry-sdk>=1.30,<2.0",
 ]
 
 [tool.setuptools.packages.find]
