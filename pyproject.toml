@@ -24,6 +24,9 @@ dev = [
   "pytest>=8.0,<10.0",
   "httpx>=0.27,<1.0",
   "qdrant-client>=1.19,<1.20",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+  "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
+  "opentelemetry-sdk>=1.30,<2.0",
 ]
 server = [
   "celery[redis]>=5.4,<6.0",
